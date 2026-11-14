@@ -553,8 +553,7 @@ async function viewMembers(v) {
       <td>${esc(p.phone || '-')}</td><td>${fmtDate(p.joined_at.slice(0, 10))}</td>
       <td><div class="actions">
         ${p.role === 'student' ? `<button class="btn ghost sm" data-view="${p.id}">ดูข้อมูล</button>` : ''}
-        ${p.id !== me.id ? `<button class="btn ghost sm" data-role="${p.id}" data-to="${p.role === 'coach' ? 'student' : 'coach'}">${p.role === 'coach' ? 'ตั้งเป็นนักเรียน' : 'ตั้งเป็นโค้ช'}</button>
-        <button class="btn ghost sm" data-active="${p.id}" data-to="${!p.is_active}">${p.is_active ? 'ปิดใช้งาน' : 'เปิดใช้งาน'}</button>` : ''}
+        ${p.id !== me.id ? `<button class="btn gold sm" data-edit="${p.id}">แก้ไข</button>` : '<span class="badge student">คุณ</span>'}
       </div></td></tr>`).join('') || '<tr><td colspan="6" class="empty">ไม่พบสมาชิก</td></tr>';
   };
   draw(); $('#m-search').oninput = draw; $('#m-grp').onchange = draw;
@@ -565,14 +564,39 @@ async function viewMembers(v) {
       const ov = openModal('ข้อมูลสมาชิก', `${profileCard(p, false)}<div id="ms"></div>`);
       ov.querySelector('.modal').style.maxWidth = '900px';
       killCharts(); renderStats($('#ms', ov), p.id).catch(fail);
-    } else if (b.dataset.role) {
-      if (!confirm('ยืนยันเปลี่ยนบทบาทสมาชิกคนนี้?')) return;
-      const { error } = await sb.rpc('set_member_role', { p_member: b.dataset.role, p_role: b.dataset.to });
-      if (error) return fail(error); toast('เปลี่ยนบทบาทแล้ว'); renderApp();
-    } else if (b.dataset.active) {
-      const { error } = await sb.rpc('set_member_active', { p_member: b.dataset.active, p_active: b.dataset.to === 'true' });
-      if (error) return fail(error); toast('อัปเดตสถานะแล้ว'); renderApp();
+    } else if (b.dataset.edit) {
+      editMemberModal(data.find(x => x.id === b.dataset.edit));
     }
+  };
+}
+function editMemberModal(p) {
+  const ov = openModal('แก้ไขสมาชิก', `
+    <form id="em-form">
+      <label>ชื่อ-นามสกุล</label><input id="em-name" type="text" required maxlength="100" value="${esc(p.full_name)}">
+      <label>ชื่อเล่น</label><input id="em-nick" type="text" maxlength="40" value="${esc(p.nickname)}">
+      <label>เบอร์โทร</label><input id="em-phone" type="tel" maxlength="20" value="${esc(p.phone || '')}">
+      <label>วัน/เดือน/ปีเกิด</label><input id="em-bd" type="date" value="${esc(p.birth_date || '')}">
+      <label>สิทธิ์</label>
+      <select id="em-role"><option value="student">นักเรียน</option><option value="coach">โค้ช (จัดการได้ทั้งระบบ)</option></select>
+      <label>สถานะบัญชี</label>
+      <select id="em-active"><option value="true">ใช้งาน</option><option value="false">ปิดใช้งาน (เข้าสู่ระบบไม่ได้)</option></select>
+      <button class="btn block" type="submit">บันทึก</button>
+    </form>`);
+  $('#em-role', ov).value = p.role; $('#em-active', ov).value = String(p.is_active);
+  $('#em-form', ov).onsubmit = async e => {
+    e.preventDefault();
+    await busy(e.target.querySelector('button[type=submit]'), async () => {
+      try {
+        const patch = { full_name: $('#em-name', ov).value.trim(), nickname: $('#em-nick', ov).value.trim(), phone: $('#em-phone', ov).value.trim() || null, birth_date: $('#em-bd', ov).value || null };
+        const up = await sb.from('profiles').update(patch).eq('id', p.id).select('id');
+        if (up.error) throw up.error;
+        if (!up.data || !up.data.length) throw new Error('บันทึกไม่สำเร็จ (ไม่มีสิทธิ์หรือไม่พบสมาชิก)');
+        const role = $('#em-role', ov).value, active = $('#em-active', ov).value === 'true';
+        if (role !== p.role) { const r = await sb.rpc('set_member_role', { p_member: p.id, p_role: role }); if (r.error) throw r.error; }
+        if (active !== p.is_active) { const r = await sb.rpc('set_member_active', { p_member: p.id, p_active: active }); if (r.error) throw r.error; }
+        ov.remove(); toast('บันทึกข้อมูลสมาชิกแล้ว'); renderApp();
+      } catch (err) { fail(err); }
+    });
   };
 }
 
