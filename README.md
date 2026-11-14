@@ -3,6 +3,7 @@
 ระบบสมาชิกชมรมปัญจกีฬากรุงเทพมหานคร (Bangkok Modern Pentathlon Club)
 
 - `index.html` — เว็บทั้งหมดในไฟล์เดียว (static, ไม่ต้อง build) deploy ได้ทันทีบน Netlify / Vercel / GitHub Pages
+- `links.html` — หน้ารวมช่องทางโซเชียล (TikTok / Instagram / Facebook) เปิดที่ /links.html
 - `supabase/schema.sql` — สำเนา schema ของฐานข้อมูล (เพื่ออ้างอิง ไม่ต้องรันซ้ำบนโปรเจคจริง)
 
 ## Stack
