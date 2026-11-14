@@ -351,7 +351,7 @@ function renderApp() {
       <img src="${SHIELD}" alt="">
       <div class="brand">Bangkok Modern Pentathlon Club<small>ONE CLUB · FIVE DISCIPLINES · ONE GOAL</small></div>
       <div class="spacer"></div>
-      <div class="who"><div>${esc(me.nickname || me.full_name)}</div><span class="badge ${me.role}">${coach ? 'โค้ช' : 'นักเรียน'}</span></div>
+      <div class="who"><div>${esc(me.nickname || me.full_name)}</div><span class="badge ${me.role}">${coach ? 'โค้ช' : 'สมาชิก'}</span></div>
       <button class="btn ghost sm" id="logout" style="color:#fff;border-color:rgba(255,255,255,.35)">ออก</button>
     </div></header>
     <nav class="tabs"><div class="in">${tabs.map(([k, l]) => `<button data-tab="${k}" class="${tab === k ? 'on' : ''}">${l}</button>`).join('')}</div></nav>
@@ -369,7 +369,7 @@ function profileCard(p, editable) {
     ${avatarHtml(p)}
     <div class="pinfo">
       <h2>${esc(p.full_name || '(ยังไม่ระบุชื่อ)')}</h2>
-      <div>${p.nickname ? 'ชื่อเล่น: ' + esc(p.nickname) + ' · ' : ''}<span class="badge ${p.role}">${p.role === 'coach' ? 'โค้ช' : 'นักเรียน'}</span>${p.is_active ? '' : ' <span class="badge off">ปิดใช้งาน</span>'}</div>
+      <div>${p.nickname ? 'ชื่อเล่น: ' + esc(p.nickname) + ' · ' : ''}<span class="badge ${p.role}">${p.role === 'coach' ? 'โค้ช' : 'สมาชิก'}</span>${p.is_active ? '' : ' <span class="badge off">ปิดใช้งาน</span>'}</div>
       <div>${p.birth_date ? `เกิด ${fmtDate(p.birth_date)} · รุ่น <b>${ageGroup(p.birth_date)}</b> (ปี ${new Date().getFullYear() + 543})` : '<span style="color:var(--red)">ยังไม่ระบุวันเกิด — กรุณาแก้ไขโปรไฟล์</span>'}</div>
       <div>สมัครเมื่อ ${fmtDate(p.joined_at.slice(0, 10))}${p.phone ? ' · โทร ' + esc(p.phone) : ''}</div>
     </div>
@@ -535,7 +535,7 @@ async function viewMembers(v) {
   if (error) throw error;
   v.innerHTML = `
     <div class="grid g4">
-      <div class="card stat"><div class="v">${data.filter(p => p.role === 'student' && p.is_active).length}</div><div class="l">นักเรียน (ใช้งานอยู่)</div></div>
+      <div class="card stat"><div class="v">${data.filter(p => p.role === 'student' && p.is_active).length}</div><div class="l">สมาชิก (ใช้งานอยู่)</div></div>
       <div class="card stat"><div class="v">${data.filter(p => p.role === 'coach').length}</div><div class="l">โค้ช</div></div>
       <div class="card stat"><div class="v">${data.filter(p => !p.is_active).length}</div><div class="l">ปิดใช้งาน</div></div>
     </div>
@@ -548,7 +548,7 @@ async function viewMembers(v) {
     const rows = data.filter(p => (!q || `${p.full_name} ${p.nickname} ${p.phone || ''}`.toLowerCase().includes(q)) && (!g || ageGroup(p.birth_date) === g));
     $('#m-body').innerHTML = rows.map(p => `<tr>
       <td>${esc(nameOf(p))}</td>
-      <td><span class="badge ${p.role}">${p.role === 'coach' ? 'โค้ช' : 'นักเรียน'}</span>${p.is_active ? '' : ' <span class="badge off">ปิด</span>'}</td>
+      <td><span class="badge ${p.role}">${p.role === 'coach' ? 'โค้ช' : 'สมาชิก'}</span>${p.is_active ? '' : ' <span class="badge off">ปิด</span>'}</td>
       <td>${p.role === 'student' ? esc(ageGroup(p.birth_date) || '-') : '-'}</td>
       <td>${esc(p.phone || '-')}</td><td>${fmtDate(p.joined_at.slice(0, 10))}</td>
       <td><div class="actions">
@@ -577,7 +577,7 @@ function editMemberModal(p) {
       <label>เบอร์โทร</label><input id="em-phone" type="tel" maxlength="20" value="${esc(p.phone || '')}">
       <label>วัน/เดือน/ปีเกิด</label><input id="em-bd" type="date" value="${esc(p.birth_date || '')}">
       <label>สิทธิ์</label>
-      <select id="em-role"><option value="student">นักเรียน</option><option value="coach">โค้ช (จัดการได้ทั้งระบบ)</option></select>
+      <select id="em-role"><option value="student">สมาชิก</option><option value="coach">โค้ช (จัดการได้ทั้งระบบ)</option></select>
       <label>สถานะบัญชี</label>
       <select id="em-active"><option value="true">ใช้งาน</option><option value="false">ปิดใช้งาน (เข้าสู่ระบบไม่ได้)</option></select>
       <button class="btn block" type="submit">บันทึก</button>
@@ -648,7 +648,7 @@ async function checkInModal(act) {
   const ov = openModal(`เช็คชื่อ: ${act.title}`, `
     <div class="note" style="text-align:left">${fmtDate(act.activity_date)} · เลือกสมาชิกที่เข้าร่วม</div>
     <input id="ck-q" type="text" placeholder="ค้นหา" style="margin-top:8px">
-    <div class="checklist" id="ck-list">${m.data.map(p => `<label data-n="${esc(nameOf(p).toLowerCase())}"><input type="checkbox" value="${p.id}" ${have.has(p.id) ? 'checked' : ''}>${esc(nameOf(p))}</label>`).join('') || '<div class="empty">ยังไม่มีนักเรียน</div>'}</div>
+    <div class="checklist" id="ck-list">${m.data.map(p => `<label data-n="${esc(nameOf(p).toLowerCase())}"><input type="checkbox" value="${p.id}" ${have.has(p.id) ? 'checked' : ''}>${esc(nameOf(p))}</label>`).join('') || '<div class="empty">ยังไม่มีสมาชิก</div>'}</div>
     <button class="btn block" id="ck-save">บันทึกการเช็คชื่อ</button>`);
   $('#ck-q', ov).oninput = e => { const q = e.target.value.trim().toLowerCase(); ov.querySelectorAll('#ck-list label').forEach(l => l.classList.toggle('hidden', !!q && !l.dataset.n.includes(q))); };
   $('#ck-save', ov).onclick = ev => busy(ev.target, async () => {
@@ -705,7 +705,7 @@ async function resultsModal(comp) {
   const ov = openModal(`ผลการแข่งขัน: ${comp.name}`, `
     <div class="note" style="text-align:left">รุ่นคำนวณตามปีแข่ง ${cy + 543} (ปีแข่ง − ปีเกิด ตามกติกา UIPM)</div>
     <form id="r-form" class="row" style="margin-top:6px">
-      <div style="flex:2"><label>นักเรียน</label><select id="rs-m" required><option value="">เลือก…</option>${m.data.map(p => `<option value="${p.id}">${esc(nameOf(p))} · ${esc(ageGroup(p.birth_date, cy) || 'ไม่มีวันเกิด')}</option>`).join('')}</select></div>
+      <div style="flex:2"><label>สมาชิก</label><select id="rs-m" required><option value="">เลือก…</option>${m.data.map(p => `<option value="${p.id}">${esc(nameOf(p))} · ${esc(ageGroup(p.birth_date, cy) || 'ไม่มีวันเกิด')}</option>`).join('')}</select></div>
       <div><label>ประเภท</label><select id="rs-d">${Object.entries(DISCIPLINES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div>
       <div><label>อันดับ</label><input id="rs-p" type="number" min="1" step="1"></div>
       <div><label>ผล/คะแนนดิบ</label><input id="rs-s" type="number" step="any"></div>
