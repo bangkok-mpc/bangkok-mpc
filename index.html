@@ -30,9 +30,16 @@ button,input,select{font:inherit}
 label{display:block;font-size:13px;font-weight:600;color:var(--navy);margin:12px 0 5px}
 input[type=text],input[type=email],input[type=password],input[type=tel],input[type=date],input[type=number],select{width:100%;padding:11px 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--text);outline:none}
 input[type=time]{width:100%;padding:11px 12px;border:1.5px solid var(--line);border-radius:10px;background:#fff;color:var(--text);outline:none}
+/* iOS Safari: stop date/time inputs from using their own width, centering and collapsed height */
+input[type=date],input[type=time]{-webkit-appearance:none;appearance:none;display:block;min-width:0;max-width:100%;min-height:46px;text-align:left;font-family:inherit;font-size:16px}
+input[type=date]::-webkit-date-and-time-value,input[type=time]::-webkit-date-and-time-value{text-align:left;min-height:1.4em;margin:0}
+input[type=date]::-webkit-calendar-picker-indicator,input[type=time]::-webkit-calendar-picker-indicator{opacity:.6}
+@supports (-webkit-touch-callout:none){input[type=time]:invalid::before{content:'เลือกเวลา';color:#8a93a6}input[type=time]:invalid:focus::before{content:''}}
+input,select{max-width:100%}
 input:focus,select:focus{border-color:var(--gold)}
 /* aligned form grid (12 cols desktop, 2 cols mobile) */
 .fgrid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:14px;align-items:start}
+.fgrid>div{min-width:0}
 .fgrid label{margin:0 0 6px}
 .fgrid input,.fgrid select{height:46px;box-sizing:border-box}
 .fgrid .c3{grid-column:span 3}.fgrid .c4{grid-column:span 4}.fgrid .c6{grid-column:span 6}.fgrid .c12{grid-column:1/-1}
@@ -93,6 +100,7 @@ tr.me{background:#fff6e5}
 .rank-no.r1{background:var(--gold);color:#fff}.rank-no.r2{background:#9aa5b8;color:#fff}.rank-no.r3{background:#a8693a;color:#fff}
 .row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
 .row>div{flex:1;min-width:140px}
+.row input,.row select{min-width:0}
 .section-title{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:22px 0 10px}
 .section-title h2{margin:0;font-size:18px;color:var(--navy)}
 .actions{display:flex;gap:6px;flex-wrap:wrap}
@@ -765,12 +773,12 @@ async function viewCompetitions(v) {
   if (error) throw error;
   v.innerHTML = `
     <div class="section-title"><h2>เพิ่มรายการแข่งขัน</h2></div>
-    <div class="card"><form id="c-form" class="row">
-      <div style="flex:2"><label>ชื่อรายการ</label><input id="cp-name" type="text" required maxlength="150"></div>
-      <div><label>วันที่</label><input id="cp-date" type="date" required value="${today()}"></div>
-      <div><label>สถานที่</label><input id="cp-loc" type="text" maxlength="120"></div>
-      <div><label>ระดับ</label><select id="cp-lvl"><option value="">-</option><option>ภายในชมรม</option><option>จังหวัด</option><option>ประเทศ</option><option>นานาชาติ</option></select></div>
-      <div style="flex:0"><button class="btn gold" type="submit">เพิ่ม</button></div>
+    <div class="card"><form id="c-form" class="fgrid">
+      <div class="c6 fm"><label for="cp-name">ชื่อรายการ</label><input id="cp-name" type="text" required maxlength="150"></div>
+      <div class="c3 fm"><label for="cp-date">วันที่</label><input id="cp-date" type="date" required value="${today()}"></div>
+      <div class="c3 fm"><label for="cp-loc">สถานที่</label><input id="cp-loc" type="text" maxlength="120"></div>
+      <div class="c3 fm"><label for="cp-lvl">ระดับ</label><select id="cp-lvl"><option value="">-</option><option>ภายในชมรม</option><option>จังหวัด</option><option>ประเทศ</option><option>นานาชาติ</option></select></div>
+      <div class="c3 fm"><label class="sp" aria-hidden="true">&nbsp;</label><button class="btn gold" type="submit">+ เพิ่มรายการ</button></div>
     </form></div>
     <div class="section-title"><h2>รายการแข่งขัน</h2></div>
     <div class="card"><div class="tbl-wrap"><table><thead><tr><th>วันที่</th><th>รายการ</th><th>ระดับ</th><th></th></tr></thead><tbody>
@@ -802,13 +810,13 @@ async function resultsModal(comp) {
   const cy = Number(comp.competition_date.slice(0, 4));
   const ov = openModal(`ผลการแข่งขัน: ${comp.name}`, `
     <div class="note" style="text-align:left">รุ่นคำนวณตามปีแข่ง ${cy + 543} (ปีแข่ง − ปีเกิด ตามกติกา UIPM)</div>
-    <form id="r-form" class="row" style="margin-top:6px">
-      <div style="flex:2"><label>สมาชิก</label><select id="rs-m" required><option value="">เลือก…</option>${m.data.map(p => `<option value="${p.id}">${esc(nameOf(p))} · ${esc(ageGroup(p.birth_date, cy) || 'ไม่มีวันเกิด')}</option>`).join('')}</select></div>
-      <div><label>ประเภท</label><select id="rs-d">${Object.entries(DISCIPLINES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div>
-      <div><label>อันดับ</label><input id="rs-p" type="number" min="1" step="1"></div>
-      <div><label>ผล/คะแนนดิบ</label><input id="rs-s" type="number" step="any"></div>
-      <div><label>คะแนนสะสม</label><input id="rs-pt" type="number" step="any" value="0" required></div>
-      <div style="flex:0"><button class="btn gold" type="submit">บันทึก</button></div>
+    <form id="r-form" class="fgrid" style="margin-top:10px">
+      <div class="c6 fm"><label for="rs-m">สมาชิก</label><select id="rs-m" required><option value="">เลือก…</option>${m.data.map(p => `<option value="${p.id}">${esc(nameOf(p))} · ${esc(ageGroup(p.birth_date, cy) || 'ไม่มีวันเกิด')}</option>`).join('')}</select></div>
+      <div class="c3 fm"><label for="rs-d">ประเภท</label><select id="rs-d">${Object.entries(DISCIPLINES).map(([k, l]) => `<option value="${k}">${l}</option>`).join('')}</select></div>
+      <div class="c3"><label for="rs-p">อันดับ</label><input id="rs-p" type="number" inputmode="numeric" min="1" step="1"></div>
+      <div class="c3"><label for="rs-s">ผล/คะแนนดิบ</label><input id="rs-s" type="number" inputmode="decimal" step="any"></div>
+      <div class="c3 fm"><label for="rs-pt">คะแนนสะสม</label><input id="rs-pt" type="number" inputmode="decimal" step="any" value="0" required></div>
+      <div class="c3 fm"><label class="sp" aria-hidden="true">&nbsp;</label><button class="btn gold" type="submit">บันทึก</button></div>
     </form>
     <div class="note" style="text-align:left">คะแนนสะสมของประเภท “รวม” จะถูกนำไปคิดอันดับชมรม · บันทึกซ้ำคนเดิม/ประเภทเดิมจะเป็นการแก้ไข</div>
     <div class="tbl-wrap" style="margin-top:10px"><table><thead><tr><th>ชื่อ</th><th>รุ่น</th><th>ประเภท</th><th>อันดับ</th><th>ผล</th><th>คะแนน</th><th></th></tr></thead><tbody>
