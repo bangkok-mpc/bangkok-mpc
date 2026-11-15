@@ -1,6 +1,6 @@
 -- Bangkok MPC — database schema (Supabase project ref: yrzwbcqargyatagcgiuy)
 -- Reference copy of the migrations already applied: init_membership_schema,
--- lock_is_active_to_coaches, signup_birth_date, member_self_check_in. Do not re-run on the live project.
+-- lock_is_active_to_coaches, signup_birth_date, member_self_check_in, coupons_redeem. Do not re-run on the live project.
 
 create type public.app_role as enum ('student', 'coach');
 
@@ -341,3 +341,121 @@ begin
 end $$;
 revoke execute on function public.self_check_in(text) from public, anon;
 grant execute on function public.self_check_in(text) to authenticated;
+
+-- ============================================================
+-- coupons_redeem: คูปองสมนาคุณ โค้ชสร้าง สมาชิกกรอกโค้ดแลก
+-- ============================================================
+create table public.coupons (
+  id uuid primary key default gen_random_uuid(),
+  code text unique check (code ~ '^[A-Z0-9]{4,20}$'),   -- trigger เติมให้ถ้าไม่ระบุ
+  title text not null check (length(btrim(title)) > 0),
+  description text,
+  expires_at date,                      -- ใช้ได้ถึงสิ้นวันนี้ (เวลาไทย) ว่าง = ไม่หมดอายุ
+  max_uses int check (max_uses is null or max_uses > 0),  -- ว่าง = ไม่จำกัดจำนวน
+  is_active boolean not null default true,
+  created_by uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now(),
+  constraint coupons_code_present check (code is not null)
+);
+alter table public.coupons enable row level security;
+
+create table public.coupon_redemptions (
+  id uuid primary key default gen_random_uuid(),
+  coupon_id uuid not null references public.coupons(id) on delete cascade,
+  member_id uuid not null references public.profiles(id) on delete cascade,
+  redeemed_at timestamptz not null default now(),
+  unique (coupon_id, member_id)
+);
+create index coupon_redemptions_member_idx on public.coupon_redemptions (member_id, redeemed_at desc);
+alter table public.coupon_redemptions enable row level security;
+
+create table public.coupon_failures (
+  id bigint generated always as identity primary key,
+  member_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create index coupon_failures_member_idx on public.coupon_failures (member_id, created_at desc);
+alter table public.coupon_failures enable row level security;   -- ไม่มี policy: ใช้ผ่านฟังก์ชันเท่านั้น
+
+create policy coupons_coach on public.coupons for all to authenticated
+  using ((select public.is_coach())) with check ((select public.is_coach()));
+create policy coupons_redeemer_select on public.coupons for select to authenticated
+  using (exists (select 1 from public.coupon_redemptions r where r.coupon_id = coupons.id and r.member_id = (select auth.uid())));
+create policy redemptions_select on public.coupon_redemptions for select to authenticated
+  using (member_id = (select auth.uid()) or (select public.is_coach()));
+create policy redemptions_coach_delete on public.coupon_redemptions for delete to authenticated
+  using ((select public.is_coach()));
+
+create or replace function public.gen_coupon_code() returns text
+language plpgsql set search_path = public as $$
+declare
+  alphabet constant text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  c text;
+begin
+  loop
+    c := '';
+    for i in 1..8 loop
+      c := c || substr(alphabet, 1 + floor(random() * length(alphabet))::int, 1);
+    end loop;
+    exit when not exists (select 1 from public.coupons where code = c);
+  end loop;
+  return c;
+end $$;
+revoke execute on function public.gen_coupon_code() from public, anon, authenticated;
+
+create or replace function public.coupons_fill_code() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.code is null or btrim(new.code) = '' then new.code := public.gen_coupon_code(); end if;
+  new.code := upper(btrim(new.code));
+  return new;
+end $$;
+revoke execute on function public.coupons_fill_code() from public, anon, authenticated;
+create trigger coupons_fill_code before insert on public.coupons
+  for each row execute function public.coupons_fill_code();
+
+-- แลกคูปอง: ตรวจโค้ด/วันหมดอายุ/โควตา/แลกซ้ำ ฝั่งเซิร์ฟเวอร์ ล็อกแถวกันแย่งใบสุดท้าย
+-- กรอกผิดเกิน 5 ครั้งใน 10 นาที = ล็อกชั่วคราว
+create or replace function public.redeem_coupon(p_code text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid();
+  code_in text := upper(regexp_replace(coalesce(p_code, ''), '[^A-Za-z0-9]', '', 'g'));
+  prof public.profiles%rowtype;
+  cp public.coupons%rowtype;
+  fails int; used int;
+begin
+  if uid is null then return jsonb_build_object('ok', false, 'reason', 'auth'); end if;
+  select * into prof from public.profiles where id = uid;
+  if not found or prof.role <> 'student' or not prof.is_active then
+    return jsonb_build_object('ok', false, 'reason', 'not_member');
+  end if;
+
+  delete from public.coupon_failures where member_id = uid and created_at < now() - interval '1 day';
+  select count(*) into fails from public.coupon_failures
+    where member_id = uid and created_at > now() - interval '10 minutes';
+  if fails >= 5 then return jsonb_build_object('ok', false, 'reason', 'locked'); end if;
+
+  select * into cp from public.coupons where code = code_in for update;
+  if not found then
+    insert into public.coupon_failures (member_id) values (uid);
+    return jsonb_build_object('ok', false, 'reason', 'wrong_code', 'left', greatest(0, 4 - fails));
+  end if;
+
+  if exists (select 1 from public.coupon_redemptions where coupon_id = cp.id and member_id = uid) then
+    return jsonb_build_object('ok', true, 'reason', 'already', 'title', cp.title);
+  end if;
+  if not cp.is_active then return jsonb_build_object('ok', false, 'reason', 'inactive', 'title', cp.title); end if;
+  if cp.expires_at is not null and (now() at time zone 'Asia/Bangkok')::date > cp.expires_at then
+    return jsonb_build_object('ok', false, 'reason', 'expired', 'title', cp.title);
+  end if;
+  if cp.max_uses is not null then
+    select count(*) into used from public.coupon_redemptions where coupon_id = cp.id;
+    if used >= cp.max_uses then return jsonb_build_object('ok', false, 'reason', 'sold_out', 'title', cp.title); end if;
+  end if;
+
+  insert into public.coupon_redemptions (coupon_id, member_id) values (cp.id, uid);
+  return jsonb_build_object('ok', true, 'reason', 'redeemed', 'title', cp.title, 'description', cp.description);
+end $$;
+revoke execute on function public.redeem_coupon(text) from public, anon;
+grant execute on function public.redeem_coupon(text) to authenticated;

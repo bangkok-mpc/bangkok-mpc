@@ -46,6 +46,11 @@ input:focus,select:focus{border-color:var(--gold)}
 .fgrid .btn{width:100%;height:46px}
 @media(max-width:699px){.fgrid .sp{display:none}.fgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.fgrid .c3,.fgrid .c4,.fgrid .c6{grid-column:span 1}.fgrid .fm{grid-column:1/-1}}
 .nw{white-space:nowrap}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-weight:700;letter-spacing:.08em}
+.ticket{position:relative;background:#fff;border:1.5px dashed var(--gold);border-left:6px solid var(--gold);border-radius:12px;padding:12px 14px;margin-top:10px}
+.ticket h4{margin:0 0 2px;font-size:16px;color:var(--navy)}
+.ticket p{margin:2px 0;font-size:14px;color:var(--text)}
+.ticket small{color:var(--muted);display:block;margin-top:6px}
 .otp-input{text-align:center;font-size:26px;letter-spacing:.35em;font-weight:700}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:0;border-radius:10px;padding:11px 16px;font-weight:600;cursor:pointer;background:var(--navy);color:#fff}
 .btn:hover{background:var(--navy-2)}
@@ -367,8 +372,8 @@ function renderApp() {
   killCharts();
   const coach = me.role === 'coach';
   const tabs = coach
-    ? [['overview','ภาพรวม'],['profile','โปรไฟล์'],['members','สมาชิก'],['activities','กิจกรรม'],['competitions','การแข่งขัน'],['ranking','อันดับ']]
-    : [['profile','ข้อมูลของฉัน'],['ranking','อันดับชมรม']];
+    ? [['overview','ภาพรวม'],['profile','โปรไฟล์'],['members','สมาชิก'],['activities','กิจกรรม'],['competitions','การแข่งขัน'],['coupons','คูปอง'],['ranking','อันดับ']]
+    : [['profile','ข้อมูลของฉัน'],['coupons','คูปอง'],['ranking','อันดับชมรม']];
   $('#root').innerHTML = `
     <header class="top"><div class="top-in">
       <img src="${SHIELD}" alt="">
@@ -382,7 +387,7 @@ function renderApp() {
   $('#logout').onclick = () => sb.auth.signOut();
   document.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => { tab = b.dataset.tab; renderApp(); });
   const v = $('#view'); v.innerHTML = '<div class="spinner">กำลังโหลด…</div>';
-  const views = { overview: viewOverview, profile: viewProfile, members: viewMembers, activities: viewActivities, competitions: viewCompetitions, ranking: viewRanking };
+  const views = { overview: viewOverview, profile: viewProfile, members: viewMembers, activities: viewActivities, competitions: viewCompetitions, coupons: v => (me.role === 'coach' ? viewCouponsAdmin(v) : viewCoupons(v)), ranking: viewRanking };
   views[tab](v).catch(fail);
 }
 
@@ -473,6 +478,155 @@ async function viewOverview(v) {
     data: { labels: agKeys, datasets: [{ label: 'สมาชิก', data: agKeys.map(k => ag[k]), backgroundColor: C.navy, borderRadius: 6 }] },
     options: { maintainAspectRatio: false, layout: { padding: { top: 18 } }, plugins: { legend: { display: false }, datalabels: lab() },
       scales: { y: yAxis('คน'), x: { grid: { display: false } } } } });
+}
+
+/* ============ coupons ============ */
+const COUPON_MSG = {
+  wrong_code: r => `โค้ดไม่ถูกต้อง (เหลืออีก ${r.left} ครั้งก่อนถูกล็อกชั่วคราว)`,
+  locked: () => 'กรอกโค้ดผิดหลายครั้ง กรุณารอ 10 นาทีแล้วลองใหม่',
+  expired: r => `คูปอง "${r.title}" หมดอายุแล้ว`,
+  inactive: r => `คูปอง "${r.title}" ปิดการใช้งานแล้ว`,
+  sold_out: r => `คูปอง "${r.title}" ถูกแลกครบจำนวนแล้ว`,
+  not_member: () => 'บัญชีนี้แลกคูปองไม่ได้',
+  auth: () => 'กรุณาเข้าสู่ระบบใหม่'
+};
+const fmtDateTime = d => d ? new Date(d).toLocaleString('th-TH', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }) + ' น.' : '-';
+const couponState = (c, used) => !c.is_active ? ['off', 'ปิดใช้งาน'] : (c.expires_at && today() > c.expires_at) ? ['off', 'หมดอายุ'] : (c.max_uses && used >= c.max_uses) ? ['off', 'แลกครบแล้ว'] : ['student', 'ใช้งานได้'];
+
+/* member: redeem + my coupons */
+async function viewCoupons(v) {
+  const { data, error } = await sb.from('coupon_redemptions').select('id, redeemed_at, coupons(title, description, expires_at)').order('redeemed_at', { ascending: false });
+  if (error) throw error;
+  v.innerHTML = `
+    <div class="section-title"><h2>แลกคูปอง</h2></div>
+    <div class="card">
+      <form id="cp-form">
+        <label for="cp-code">โค้ดคูปอง</label>
+        <div style="display:flex;gap:8px">
+          <input id="cp-code" type="text" class="mono" maxlength="24" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="เช่น AB12CD34" required style="flex:1;font-size:18px;text-align:center;text-transform:uppercase">
+          <button class="btn gold" type="submit">แลก</button>
+        </div>
+      </form>
+    </div>
+    <div class="section-title"><h2>คูปองของฉัน</h2></div>
+    <div class="card">${data.length ? data.map(r => `<div class="ticket"><h4>${esc(r.coupons ? r.coupons.title : '(คูปอง)')}</h4>${r.coupons && r.coupons.description ? `<p>${esc(r.coupons.description)}</p>` : ''}<small>แลกเมื่อ ${fmtDateTime(r.redeemed_at)}${r.coupons && r.coupons.expires_at ? ` · ใช้ได้ถึง ${fmtDate(r.coupons.expires_at)}` : ''}</small></div>`).join('') : '<div class="empty">ยังไม่มีคูปอง กรอกโค้ดที่ได้รับจากโค้ชด้านบน</div>'}</div>`;
+  $('#cp-form', v).onsubmit = async e => {
+    e.preventDefault();
+    await busy(e.target.querySelector('button'), async () => {
+      const { data: r, error: er } = await sb.rpc('redeem_coupon', { p_code: $('#cp-code', v).value });
+      if (er) return fail(er);
+      if (r.ok) {
+        const ov = openModal(r.reason === 'already' ? 'แลกคูปองนี้ไว้แล้ว' : 'แลกคูปองสำเร็จ 🎉', `<div class="ticket" style="margin-top:0"><h4>${esc(r.title)}</h4>${r.description ? `<p>${esc(r.description)}</p>` : ''}</div><button class="btn gold block" data-close style="margin-top:14px">ตกลง</button>`);
+        ov.addEventListener('click', ev => { if (ev.target === ov || ev.target.hasAttribute('data-close')) renderApp(); });
+        return;
+      }
+      toast((COUPON_MSG[r.reason] || (() => 'แลกคูปองไม่สำเร็จ'))(r), true);
+    });
+  };
+}
+
+/* coach: manage coupons */
+function couponFields(p, c = {}, withCode = false) {
+  return `
+    <div class="c6 fm"><label for="${p}-title">ชื่อคูปอง</label><input id="${p}-title" type="text" required maxlength="120" placeholder="เช่น ส่วนลดค่าสมัครแข่ง 100 บาท" value="${esc(c.title || '')}"></div>
+    ${withCode ? `<div class="c3 fm"><label for="${p}-code">โค้ด (เว้นว่าง = สุ่มให้)</label><input id="${p}-code" class="mono" type="text" maxlength="20" autocapitalize="characters" autocomplete="off" placeholder="เช่น BKKMPC26" style="text-transform:uppercase"></div>` : '<div class="c3 sp"></div>'}
+    <div class="c3 fm"><label for="${p}-exp">ใช้ได้ถึงวันที่ (ไม่ใส่ = ไม่หมดอายุ)</label><input id="${p}-exp" type="date" value="${esc(c.expires_at || '')}"></div>
+    <div class="c6 fm"><label for="${p}-desc">รายละเอียด / เงื่อนไข</label><input id="${p}-desc" type="text" maxlength="300" placeholder="เช่น แสดงหน้าจอนี้กับโค้ชเพื่อรับสิทธิ์" value="${esc(c.description || '')}"></div>
+    <div class="c3 fm"><label for="${p}-max">จำนวนสิทธิ์ (ไม่ใส่ = ไม่จำกัด)</label><input id="${p}-max" type="number" inputmode="numeric" min="1" step="1" value="${c.max_uses || ''}"></div>`;
+}
+function readCoupon(p, root = document, withCode = false) {
+  const val = id => $(`#${p}-${id}`, root).value.trim();
+  const max = val('max');
+  const f = { title: val('title'), description: val('desc') || null, expires_at: val('exp') || null, max_uses: max ? Number(max) : null };
+  if (max && (!Number.isInteger(f.max_uses) || f.max_uses < 1)) { toast('จำนวนสิทธิ์ต้องเป็นจำนวนเต็มตั้งแต่ 1', true); return null; }
+  if (withCode) {
+    const code = val('code').toUpperCase();
+    if (code && !/^[A-Z0-9]{4,20}$/.test(code)) { toast('โค้ดใช้ได้เฉพาะ A-Z และ 0-9 ยาว 4-20 ตัว', true); return null; }
+    f.code = code || null;
+  }
+  return f;
+}
+async function viewCouponsAdmin(v) {
+  const [cs, rs] = await Promise.all([
+    fetchAll(() => sb.from('coupons').select('*').order('created_at', { ascending: false }).order('id')),
+    fetchAll(() => sb.from('coupon_redemptions').select('id, coupon_id').order('id'))
+  ]);
+  const used = {}; rs.forEach(r => used[r.coupon_id] = (used[r.coupon_id] || 0) + 1);
+  v.innerHTML = `
+    <div class="section-title"><h2>สร้างคูปองสมนาคุณ</h2></div>
+    <div class="card"><form id="cu-form" class="fgrid">
+      ${couponFields('cu', {}, true)}
+      <div class="c3 fm"><label class="sp" aria-hidden="true">&nbsp;</label><button class="btn gold" type="submit">+ สร้างคูปอง</button></div>
+    </form></div>
+    <div class="section-title"><h2>คูปองทั้งหมด</h2></div>
+    <div class="grid g2 ov2">
+    ${cs.map(c => { const [cls, label] = couponState(c, used[c.id] || 0); return `<div class="ticket" style="margin-top:0">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><button class="btn ghost sm mono" data-copy="${esc(c.code)}" title="แตะเพื่อคัดลอก">${esc(c.code)}</button><span class="badge ${cls}">${label}</span></div>
+      <h4 style="margin-top:10px">${esc(c.title)}</h4>${c.description ? `<p>${esc(c.description)}</p>` : ''}
+      <small>${c.expires_at ? `ใช้ได้ถึง ${fmtDate(c.expires_at)}` : 'ไม่หมดอายุ'} · แลกแล้ว ${used[c.id] || 0}${c.max_uses ? ` / ${c.max_uses}` : ''} คน</small>
+      <div class="actions" style="margin-top:12px"><button class="btn sm" data-who="${c.id}">ผู้แลก</button><button class="btn ghost sm" data-edit="${c.id}">แก้ไข</button><button class="btn ghost sm" data-toggle="${c.id}">${c.is_active ? 'ปิด' : 'เปิด'}</button><button class="btn ghost sm" data-del="${c.id}">ลบ</button></div></div>`; }).join('') || '<div class="card empty" style="grid-column:1/-1">ยังไม่มีคูปอง</div>'}
+    </div>
+    <div class="note" style="text-align:left">ส่งโค้ดให้สมาชิก แล้วให้กรอกในแท็บ "คูปอง" · สมาชิกแลกได้คนละ 1 ครั้งต่อโค้ด · กรอกผิดเกิน 5 ครั้งใน 10 นาทีจะถูกล็อกชั่วคราว</div>`;
+
+  $('#cu-form', v).onsubmit = async e => {
+    e.preventDefault();
+    const f = readCoupon('cu', v, true); if (!f) return;
+    await busy(e.target.querySelector('button[type=submit]'), async () => {
+      const { error } = await sb.from('coupons').insert({ ...f, created_by: me.id });
+      if (error) return error.code === '23505' ? toast('โค้ดนี้ถูกใช้แล้ว ลองโค้ดอื่นหรือเว้นว่างให้ระบบสุ่ม', true) : fail(error);
+      toast('สร้างคูปองแล้ว'); renderApp();
+    });
+  };
+  v.onclick = async e => {
+    const b = e.target.closest('button'); if (!b) return;
+    const c = id => cs.find(x => x.id === id);
+    if (b.dataset.copy) {
+      try { await navigator.clipboard.writeText(b.dataset.copy); toast(`คัดลอกโค้ด ${b.dataset.copy} แล้ว`); } catch { toast(`โค้ด: ${b.dataset.copy}`); }
+    }
+    if (b.dataset.who) couponWhoModal(c(b.dataset.who));
+    if (b.dataset.edit) couponEditModal(c(b.dataset.edit));
+    if (b.dataset.toggle) {
+      const x = c(b.dataset.toggle);
+      const { error } = await sb.from('coupons').update({ is_active: !x.is_active }).eq('id', x.id);
+      if (error) return fail(error); toast(x.is_active ? 'ปิดคูปองแล้ว' : 'เปิดคูปองแล้ว'); renderApp();
+    }
+    if (b.dataset.del) {
+      const x = c(b.dataset.del);
+      if (!confirm(`ลบคูปอง "${x.title}" ?\nประวัติการแลก ${used[x.id] || 0} รายการจะถูกลบด้วย (ถ้าแค่หยุดใช้ ให้กด "ปิด" แทน)`)) return;
+      const { error } = await sb.from('coupons').delete().eq('id', x.id);
+      if (error) return fail(error); toast('ลบคูปองแล้ว'); renderApp();
+    }
+  };
+}
+function couponEditModal(c) {
+  const ov = openModal(`แก้ไขคูปอง ${c.code}`, `<form id="ce-form" class="fgrid" style="margin-top:12px">${couponFields('ce', c)}<div class="c12"><button class="btn gold" type="submit">บันทึก</button></div></form>`);
+  $('#ce-form', ov).onsubmit = async e => {
+    e.preventDefault();
+    const f = readCoupon('ce', ov); if (!f) return;
+    await busy(e.target.querySelector('button[type=submit]'), async () => {
+      const { error } = await sb.from('coupons').update(f).eq('id', c.id);
+      if (error) return fail(error); ov.remove(); toast('บันทึกแล้ว'); renderApp();
+    });
+  };
+}
+async function couponWhoModal(c) {
+  const ov = openModal(`ผู้แลก: ${c.title}`, '<div class="empty">กำลังโหลด…</div>');
+  const body = $('.body', ov);
+  const draw = async () => {
+    const { data, error } = await sb.from('coupon_redemptions').select('id, redeemed_at, profiles(full_name, nickname)').eq('coupon_id', c.id).order('redeemed_at', { ascending: false });
+    if (error) { body.innerHTML = ''; return fail(error); }
+    body.innerHTML = data.length
+      ? `<div class="tbl-wrap"><table><thead><tr><th>สมาชิก</th><th>แลกเมื่อ</th><th></th></tr></thead><tbody>${data.map(r => `<tr><td>${esc(r.profiles ? nameOf(r.profiles) : '(ไม่ทราบ)')}</td><td class="nw">${fmtDateTime(r.redeemed_at)}</td><td><button class="btn ghost sm" data-undo="${r.id}">ยกเลิกสิทธิ์</button></td></tr>`).join('')}</tbody></table></div><div class="note" style="text-align:left">ยกเลิกแล้วสมาชิกคนนั้นกรอกโค้ดแลกใหม่ได้อีกครั้ง</div>`
+      : '<div class="empty">ยังไม่มีคนแลกคูปองนี้</div>';
+  };
+  body.onclick = async e => {
+    const b = e.target.closest('[data-undo]'); if (!b) return;
+    if (!confirm('ยกเลิกสิทธิ์ของสมาชิกคนนี้?')) return;
+    const { error } = await sb.from('coupon_redemptions').delete().eq('id', b.dataset.undo);
+    if (error) return fail(error); toast('ยกเลิกแล้ว'); draw();
+  };
+  ov.addEventListener('click', e => { if (e.target === ov || e.target.hasAttribute('data-close')) renderApp(); });
+  draw();
 }
 
 /* ============ profile ============ */
