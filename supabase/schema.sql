@@ -1,6 +1,6 @@
 -- Bangkok MPC — database schema (Supabase project ref: yrzwbcqargyatagcgiuy)
 -- Reference copy of the migrations already applied: init_membership_schema,
--- lock_is_active_to_coaches, signup_birth_date. Do not re-run on the live project.
+-- lock_is_active_to_coaches, signup_birth_date, member_self_check_in. Do not re-run on the live project.
 
 create type public.app_role as enum ('student', 'coach');
 
@@ -224,3 +224,120 @@ create policy avatars_update on storage.objects for update to authenticated
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = (select auth.uid())::text);
 create policy avatars_delete on storage.objects for delete to authenticated
   using (bucket_id = 'avatars' and (storage.foldername(name))[1] = (select auth.uid())::text);
+
+-- ============================================================
+-- member_self_check_in: สมาชิกเช็คชื่อเองด้วยรหัส 6 หลัก
+-- ============================================================
+alter table public.activities
+  add column start_time time,
+  add column end_time time,
+  add constraint activities_time_order check (start_time is null or end_time is null or end_time > start_time);
+
+-- รหัสแยกตาราง เพราะ activities อ่านได้ทุกคนที่ล็อกอิน
+create table public.activity_codes (
+  activity_id uuid primary key references public.activities(id) on delete cascade,
+  code text not null unique check (code ~ '^[0-9]{6}$'),
+  created_at timestamptz not null default now()
+);
+alter table public.activity_codes enable row level security;
+create policy activity_codes_coach on public.activity_codes
+  for all to authenticated
+  using ((select public.is_coach())) with check ((select public.is_coach()));
+
+-- นับครั้งที่กรอกรหัสผิด (เข้าถึงผ่านฟังก์ชันเท่านั้น จึงไม่มี policy)
+create table public.checkin_failures (
+  id bigint generated always as identity primary key,
+  member_id uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now()
+);
+create index checkin_failures_member_idx on public.checkin_failures (member_id, created_at desc);
+alter table public.checkin_failures enable row level security;
+
+create or replace function public.gen_activity_code() returns text
+language plpgsql set search_path = public as $$
+declare c text;
+begin
+  loop
+    c := (100000 + floor(random() * 900000))::int::text;
+    exit when not exists (select 1 from public.activity_codes where code = c);
+  end loop;
+  return c;
+end $$;
+revoke execute on function public.gen_activity_code() from public, anon, authenticated;
+
+create or replace function public.activities_make_code() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.activity_codes (activity_id, code) values (new.id, public.gen_activity_code());
+  return new;
+end $$;
+revoke execute on function public.activities_make_code() from public, anon, authenticated;
+create trigger activities_make_code after insert on public.activities
+  for each row execute function public.activities_make_code();
+
+insert into public.activity_codes (activity_id, code)
+select id, public.gen_activity_code() from public.activities
+on conflict do nothing;
+
+create or replace function public.regenerate_activity_code(p_activity_id uuid) returns text
+language plpgsql security definer set search_path = public as $$
+declare c text;
+begin
+  if not public.is_coach() then raise exception 'not allowed'; end if;
+  c := public.gen_activity_code();
+  update public.activity_codes set code = c, created_at = now() where activity_id = p_activity_id;
+  if not found then insert into public.activity_codes (activity_id, code) values (p_activity_id, c); end if;
+  return c;
+end $$;
+revoke execute on function public.regenerate_activity_code(uuid) from public, anon;
+grant execute on function public.regenerate_activity_code(uuid) to authenticated;
+
+-- ตรวจรหัส + ช่วงเวลา (Asia/Bangkok) ฝั่งเซิร์ฟเวอร์
+-- เปิดก่อนเริ่ม 30 นาที ปิดเมื่อถึงเวลาจบ (ไม่ระบุเวลา = เปิดทั้งวันของวันกิจกรรม)
+-- ผิดเกิน 5 ครั้งใน 10 นาที = ล็อกชั่วคราว
+create or replace function public.self_check_in(p_code text) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  uid uuid := auth.uid();
+  code_in text := regexp_replace(coalesce(p_code, ''), '[^0-9]', '', 'g');
+  prof public.profiles%rowtype;
+  act public.activities%rowtype;
+  opens timestamptz; closes timestamptz;
+  fails int;
+begin
+  if uid is null then return jsonb_build_object('ok', false, 'reason', 'auth'); end if;
+  select * into prof from public.profiles where id = uid;
+  if not found or prof.role <> 'student' or not prof.is_active then
+    return jsonb_build_object('ok', false, 'reason', 'not_member');
+  end if;
+
+  delete from public.checkin_failures where member_id = uid and created_at < now() - interval '1 day';
+  select count(*) into fails from public.checkin_failures
+    where member_id = uid and created_at > now() - interval '10 minutes';
+  if fails >= 5 then return jsonb_build_object('ok', false, 'reason', 'locked'); end if;
+
+  select a.* into act from public.activity_codes c join public.activities a on a.id = c.activity_id
+    where c.code = code_in;
+  if not found then
+    insert into public.checkin_failures (member_id) values (uid);
+    return jsonb_build_object('ok', false, 'reason', 'wrong_code', 'left', greatest(0, 4 - fails));
+  end if;
+
+  opens  := ((act.activity_date + coalesce(act.start_time, time '00:00')) at time zone 'Asia/Bangkok') - interval '30 minutes';
+  closes := (act.activity_date + coalesce(act.end_time, time '23:59:59')) at time zone 'Asia/Bangkok';
+  if now() < opens then
+    return jsonb_build_object('ok', false, 'reason', 'too_early', 'title', act.title, 'opens_at', opens);
+  end if;
+  if now() > closes then
+    return jsonb_build_object('ok', false, 'reason', 'closed', 'title', act.title);
+  end if;
+
+  insert into public.attendance (activity_id, member_id, checked_in_by)
+    values (act.id, uid, uid) on conflict (activity_id, member_id) do nothing;
+  if found then
+    return jsonb_build_object('ok', true, 'reason', 'checked_in', 'title', act.title);
+  end if;
+  return jsonb_build_object('ok', true, 'reason', 'already', 'title', act.title);
+end $$;
+revoke execute on function public.self_check_in(text) from public, anon;
+grant execute on function public.self_check_in(text) to authenticated;
