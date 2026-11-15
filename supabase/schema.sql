@@ -1,6 +1,6 @@
 -- Bangkok MPC — database schema (Supabase project ref: yrzwbcqargyatagcgiuy)
 -- Reference copy of the migrations already applied: init_membership_schema,
--- lock_is_active_to_coaches, signup_birth_date, member_self_check_in, coupons_redeem. Do not re-run on the live project.
+-- lock_is_active_to_coaches, signup_birth_date, member_self_check_in, coupons_redeem, avatars_select_policy. Do not re-run on the live project.
 
 create type public.app_role as enum ('student', 'coach');
 
@@ -459,3 +459,10 @@ begin
 end $$;
 revoke execute on function public.redeem_coupon(text) from public, anon;
 grant execute on function public.redeem_coupon(text) to authenticated;
+
+-- ============================================================
+-- avatars_select_policy: อัปโหลดแบบ upsert ต้องมี SELECT policy
+-- (ก่อนหน้านี้ทุกการอัปโหลดรูปโปรไฟล์ถูกปฏิเสธด้วย HTTP 400 / RLS)
+-- ============================================================
+create policy avatars_select on storage.objects for select to authenticated
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = (select auth.uid())::text);
